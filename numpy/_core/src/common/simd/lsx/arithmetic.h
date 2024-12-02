@@ -78,31 +78,27 @@
 // divide each unsigned 8-bit element by a precomputed divisor
 NPY_FINLINE npyv_u8 npyv_divc_u8(npyv_u8 a, const npyv_u8x3 divisor)
 {
-    const __m128i bmask = __lsx_vreplgr2vr_w(0x00FF00FF);
-    const __m128i shf1b = __lsx_vreplgr2vr_b(0xFFU >> __lsx_vpickve2gr_w(divisor.val[1], 0));
-    const __m128i shf2b = __lsx_vreplgr2vr_b(0xFFU >> __lsx_vpickve2gr_w(divisor.val[2], 0));
     // high part of unsigned multiplication
-    __m128i mulhi_even  = __lsx_vmul_h(__lsx_vand_v(a, bmask), divisor.val[0]);
-    __m128i mulhi_odd   = __lsx_vmul_h(__lsx_vsrli_h(a, 8), divisor.val[0]);
-            mulhi_even  = __lsx_vsrli_h(mulhi_even, 8);
-    __m128i mulhi       = npyv_select_u8(bmask, mulhi_even, mulhi_odd);
-    // floor(a/d)       = (mulhi + ((a-mulhi) >> sh1)) >> sh2
+    __m128i mulhi       = __lsx_vmuh_bu(a, divisor.val[0]);
+    // floor(a/d) = (mulhi + ((a-mulhi) >> sh1)) >> sh2
     __m128i q           = __lsx_vsub_b(a, mulhi);
-            q           = __lsx_vand_v(__lsx_vsrl_h(q, divisor.val[1]), shf1b);
+            q           = __lsx_vsrl_b(q, divisor.val[1]);
             q           = __lsx_vadd_b(mulhi, q);
-            q           = __lsx_vand_v(__lsx_vsrl_h(q, divisor.val[2]), shf2b);
+            q           = __lsx_vsrl_b(q, divisor.val[2]);
+
     return  q;
 }
 // divide each signed 8-bit element by a precomputed divisor (round towards zero)
 NPY_FINLINE npyv_s16 npyv_divc_s16(npyv_s16 a, const npyv_s16x3 divisor);
 NPY_FINLINE npyv_s8 npyv_divc_s8(npyv_s8 a, const npyv_s8x3 divisor)
 {
-    const __m128i bmask = __lsx_vreplgr2vr_w(0x00FF00FF);
-    // instead of _mm_cvtepi8_epi16/_mm_packs_epi16 to wrap around overflow
-    __m128i divc_even = npyv_divc_s16(__lsx_vsrai_h(__lsx_vslli_h(a, 8), 8), divisor);
-    __m128i divc_odd  = npyv_divc_s16(__lsx_vsrai_h(a, 8), divisor);
-            divc_odd  = __lsx_vslli_h(divc_odd, 8);
-    return npyv_select_u8(bmask, divc_even, divc_odd);
+    __m128i mulhi       = __lsx_vmuh_b(a, divisor.val[0]);
+    // q          = ((a + mulhi) >> sh1) - XSIGN(a)
+    // trunc(a/d) = (q ^ dsign) - dsign
+    __m128i q           = __lsx_vsra_b(__lsx_vadd_b(a, mulhi), divisor.val[1]);
+            q           = __lsx_vsub_b(q, __lsx_vsrai_b(a, 7));
+            q           = __lsx_vsub_b(__lsx_vxor_v(q, divisor.val[2]), divisor.val[2]);
+    return q;
 }
 // divide each unsigned 16-bit element by a precomputed divisor
 NPY_FINLINE npyv_u16 npyv_divc_u16(npyv_u16 a, const npyv_u16x3 divisor)
@@ -171,18 +167,10 @@ NPY_FINLINE npyv_u64 npyv_divc_u64(npyv_u64 a, const npyv_u64x3 divisor)
 // divide each signed 64-bit element by a precomputed divisor (round towards zero)
 NPY_FINLINE npyv_s64 npyv_divc_s64(npyv_s64 a, const npyv_s64x3 divisor)
 {
-    __m128i mulhi      = __lsx_vmuh_d(a, divisor.val[0]);;
-    __m128i asign      = __lsx_vslt_d(a, __lsx_vldi(0));
-    // q               = (a + mulhi) >> sh
-    __m128i q          = __lsx_vadd_d(a, mulhi);
-    // emulate arithmetic right shift
-    const __m128i sigb = npyv_setall_s64(1LL << 63);
-            q          = __lsx_vsrl_d(__lsx_vadd_d(q, sigb), divisor.val[1]);
-            q          = __lsx_vsub_d(q, __lsx_vsrl_d(sigb, divisor.val[1]));
-    // q               = q - XSIGN(a)
-    // trunc(a/d)      = (q ^ dsign) - dsign
-            q          = __lsx_vsub_d(q, asign);
-            q          = __lsx_vsub_d(__lsx_vxor_v(q, divisor.val[2]), divisor.val[2]);
+    __m128i   mulhi      = __lsx_vmuh_d(a, divisor.val[0]);
+    __m128i   q          = __lsx_vsra_d(__lsx_vadd_d(a, mulhi), divisor.val[1]);
+              q          = __lsx_vsub_d(q, __lsx_vsrai_d(a, 63));
+              q          = __lsx_vsub_d(__lsx_vxor_v(q, divisor.val[2]), divisor.val[2]);
     return  q;
 }
 /***************************
